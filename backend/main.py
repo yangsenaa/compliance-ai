@@ -11,7 +11,7 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -26,7 +26,9 @@ from tools.asr_tool import transcribe
 app = FastAPI(
     title="合规质检 AI 双雄",
     description="催收合规质检 AI 系统，包含智能质检官和制度答疑官",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/api-docs",      # 避免与前端 /docs 路由冲突
+    redoc_url="/api-redoc",
 )
 
 # CORS 配置（开发模式，允许所有来源）
@@ -311,9 +313,35 @@ async def ws_advisor(websocket: WebSocket):
 # ==================== 静态文件服务 ====================
 
 # 挂载前端构建产物（如果存在）
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+frontend_dist = Path(__file__).parent / "static"
+if not frontend_dist.exists():
+    frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    # 先挂载 assets 静态资源
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # SPA fallback：所有未匹配路由返回 index.html
+    index_html = frontend_dist / "index.html"
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        ico = frontend_dist / "favicon.ico"
+        if ico.exists():
+            return FileResponse(str(ico))
+        return JSONResponse({}, status_code=404)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """SPA fallback — 所有前端路由返回 index.html"""
+        # 如果是真实文件则直接返回
+        target = frontend_dist / full_path
+        if target.exists() and target.is_file():
+            return FileResponse(str(target))
+        # 否则返回 SPA 入口
+        return FileResponse(str(index_html))
 
 
 # ==================== 启动入口 ====================
